@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and local config
+.env
+config/projects.yaml
+config/google_oauth_client.json
+
+# Runtime data — local only, never commit
+cache/
+out/
+data/
+*.log
+
+# Cursor / IDE workspace state (we read this, we never check it in)
+*.vscdb
+*.vscdb-journal

@@ -1,0 +1,46 @@
+# Project / matter mapping.
+# Copy this file to `projects.yaml` (gitignored) and edit it to reflect your real work.
+#
+# How resolution works:
+#   For each Event, the mapper checks each project in order. The FIRST project whose
+#   matchers fire on the event wins. If no project matches, the event gets matter_id = null
+#   and the LLM is asked to flag it for human review.
+#
+# Matcher fields (all optional, all combined as logical OR within a project):
+#   cursor_workspaces  - exact workspace folder names (e.g. "billable", "acme-site")
+#   gdoc_folder_ids    - Google Drive folder IDs (events whose doc lives under one match)
+#   gdoc_doc_ids       - specific Google Doc IDs
+#   keywords           - case-insensitive substrings checked against project_hint and content_excerpt
+#
+# Order matters: put more-specific projects above more-general ones.
+
+projects:
+  internal-billable-agent:
+    display_name: "Internal R&D — Billable Agent"
+    cursor_workspaces:
+      - billable
+    gdoc_folder_ids: []
+    gdoc_doc_ids: []
+    keywords:
+      - billable agent
+      - timesheet ai
+      - activity tracker
+
+  acme-website:
+    display_name: "Acme Corp — Website Redesign"
+    cursor_workspaces:
+      - acme-site
+      - acme-shared
+    gdoc_folder_ids:
+      - 1aBcDeFgHiJkLmNoPqRsTuVwXyZ
+    keywords:
+      - acme
+      - corp redesign
+
+  internal-admin:
+    display_name: "Internal Admin (non-billable)"
+    keywords:
+      - timesheet
+      - invoice
+      - expense
+      - "1:1"   # quote any keyword with punctuation/digits — YAML will otherwise parse it as a number/date/etc.

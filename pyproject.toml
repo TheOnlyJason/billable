@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "billable"
+version = "0.1.0"
+description = "AI agent that captures what you did and produces a billable timesheet."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Jason" }]
+dependencies = [
+    "openai>=1.40.0",
+    "google-api-python-client>=2.130.0",
+    "google-auth>=2.30.0",
+    "google-auth-oauthlib>=1.2.0",
+    "google-auth-httplib2>=0.2.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.1",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[project.scripts]
+billable = "billable.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/billable"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"

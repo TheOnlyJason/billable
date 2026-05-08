@@ -1,0 +1,23 @@
+# Billing increment and rounding policy.
+#
+# increment_hours: smallest unit each entry is rounded to. Common values:
+#   0.25  - 15-minute increments (default for consultants)
+#   0.1   - 6-minute increments (legal industry standard)
+#   0.5   - 30-minute increments
+#
+# rounding: how to round the raw duration to the increment.
+#   up      - always round up to the next increment (most billing-friendly; default)
+#   nearest - round to the nearest increment
+#   down    - always round down (rare; under-bills)
+#
+# minimum_entry_hours: any entry with rounded duration below this is dropped.
+#   Set to 0 to keep all entries.
+#
+# daily_cutoff: events whose timestamp is at or after this local time count
+#   toward the NEXT day's timesheet. Useful if you regularly work past midnight.
+#   Format: "HH:MM" 24-hour.
+
+increment_hours: 0.25
+rounding: up
+minimum_entry_hours: 0.25
+daily_cutoff: "23:59"
