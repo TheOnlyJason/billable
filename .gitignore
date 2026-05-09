@@ -25,6 +25,8 @@ Thumbs.db
 # Secrets and local config
 .env
 config/projects.yaml
+config/projects.yaml.bak
+config/projects.proposed.yaml
 config/google_oauth_client.json
 
 # Runtime data — local only, never commit

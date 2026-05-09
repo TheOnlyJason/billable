@@ -79,3 +79,55 @@ def test_no_mapper_falls_back_to_matter_id(tmp_path: Path) -> None:
     )
     text = out_path.read_text(encoding="utf-8")
     assert "| acme | x | 0.25 |" in text
+
+
+# --- auto-classified surfacing (Layer 1) ------------------------------------
+
+
+def test_auto_classified_matters_get_footer_and_label(tmp_path: Path) -> None:
+    """Synthetic matters (no yaml rule) are tagged '(auto)' and listed in a footer."""
+    mapper = ProjectMapper(
+        rules=(ProjectRule(matter_id="acme", display_name="Acme Corp"),)
+    )
+    entries = [
+        _entry("acme", "Built the calendar component.", "2.00", ["cursor:abc:1"]),
+        _entry("bot-1", "Worked on Handshake bot.", "1.50", ["cursor:def:1"]),
+    ]
+    out_path = MarkdownRenderer(mapper=mapper).render(
+        target_date=date(2026, 5, 7), entries=entries, out_dir=tmp_path
+    )
+    text = out_path.read_text(encoding="utf-8")
+
+    assert "| Acme Corp | Built the calendar component." in text
+    assert "(auto)" not in text.split("| Acme Corp")[0]
+    assert "| Bot 1 (auto) | Worked on Handshake bot." in text
+    assert "## Auto-classified matters" in text
+    assert "`bot-1`" in text
+    assert "(Bot 1)" in text
+
+
+def test_no_auto_footer_when_all_entries_are_explicit(tmp_path: Path) -> None:
+    mapper = ProjectMapper(
+        rules=(ProjectRule(matter_id="acme", display_name="Acme Corp"),)
+    )
+    entries = [_entry("acme", "x", "1.00", [])]
+    text = (
+        MarkdownRenderer(mapper=mapper)
+        .render(target_date=date(2026, 5, 7), entries=entries, out_dir=tmp_path)
+        .read_text(encoding="utf-8")
+    )
+    assert "## Auto-classified matters" not in text
+    assert "(auto)" not in text
+
+
+def test_unclassified_does_not_count_as_auto(tmp_path: Path) -> None:
+    """The synthetic 'unclassified' bucket is its own concept, not auto-discovery."""
+    mapper = ProjectMapper(rules=())
+    entries = [_entry("unclassified", "Something we couldn't place.", "0.50", [])]
+    text = (
+        MarkdownRenderer(mapper=mapper)
+        .render(target_date=date(2026, 5, 7), entries=entries, out_dir=tmp_path)
+        .read_text(encoding="utf-8")
+    )
+    assert "(auto)" not in text
+    assert "## Auto-classified matters" not in text

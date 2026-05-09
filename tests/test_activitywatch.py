@@ -15,6 +15,7 @@ from billable.adapters.activitywatch import (
     _merge_into_blocks,
     _pick_bucket,
     _subtract_afk,
+    extract_cursor_workspace,
 )
 
 
@@ -197,5 +198,79 @@ def test_capture_full_pipeline(monkeypatch) -> None:
     e = events[0]
     assert e.source == "activitywatch"
     assert e.duration == timedelta(minutes=30)
-    assert e.project_hint == "main.py"
+    # Non-Cursor windows leave project_hint as None — keyword matching still
+    # operates on content_excerpt for those.
+    assert e.project_hint is None
     assert e.raw == {"app": "Code", "title": "main.py"}
+
+
+# --- extract_cursor_workspace --------------------------------------------
+
+
+def test_extract_cursor_workspace_typical_titles() -> None:
+    cases = {
+        ".env - bot-1 - Cursor": "bot-1",
+        "main.py - billable - Cursor": "billable",
+        "Clinical Documentation Review - hp-revision-portal - Cursor": "hp-revision-portal",
+        "SafeShorts Studio - youtubebot - Cursor": "youtubebot",
+        "timesheet.sql - teamchat - Cursor": "teamchat",
+    }
+    for title, expected in cases.items():
+        assert extract_cursor_workspace("Cursor.exe", title) == expected, title
+
+
+def test_extract_cursor_workspace_handles_doc_with_dash() -> None:
+    # The doc name itself contains " - " — we must still pick the
+    # second-to-last segment as the workspace.
+    assert (
+        extract_cursor_workspace(
+            "Cursor.exe", "My File - Draft.md - billable - Cursor"
+        )
+        == "billable"
+    )
+
+
+def test_extract_cursor_workspace_returns_none_for_non_cursor_apps() -> None:
+    assert extract_cursor_workspace("msedge.exe", "Anything - Foo - Cursor") is None
+    assert extract_cursor_workspace("chrome.exe", "doc - foo - Cursor") is None
+    assert extract_cursor_workspace("Code.exe", "main.py - billable - Code") is None
+
+
+def test_extract_cursor_workspace_returns_none_for_welcome_or_short_titles() -> None:
+    assert extract_cursor_workspace("Cursor.exe", "Cursor") is None
+    assert extract_cursor_workspace("Cursor.exe", "Welcome - Cursor") is None
+    assert extract_cursor_workspace("Cursor.exe", "") is None
+
+
+def test_extract_cursor_workspace_accepts_lowercase_app() -> None:
+    assert extract_cursor_workspace("cursor.exe", ".env - bot-1 - Cursor") == "bot-1"
+
+
+def test_extract_cursor_workspace_with_real_cursor_window(monkeypatch) -> None:
+    """End-to-end: a Cursor focus block emits project_hint = workspace."""
+    import billable.adapters.activitywatch as aw
+
+    local_tz = datetime.now().astimezone().tzinfo
+    target_start = datetime(2026, 5, 8, 10, 0, tzinfo=local_tz)
+
+    buckets = {"aw-watcher-window_test": {}, "aw-watcher-afk_test": {}}
+    window_events = [
+        _aw_event(target_start, 900, "Cursor.exe", ".env - bot-1 - Cursor"),
+        _aw_event(target_start + timedelta(seconds=900), 900, "Cursor.exe", ".env - bot-1 - Cursor"),
+    ]
+
+    monkeypatch.setattr(aw.socket, "gethostname", lambda: "test")
+
+    def fake_http(url: str, timeout: float):
+        if url.endswith("/api/0/buckets/"):
+            return buckets
+        if "aw-watcher-window" in url:
+            return window_events
+        return []
+
+    monkeypatch.setattr(aw, "_http_json", fake_http)
+
+    events = ActivityWatchAdapter(min_focus_minutes=2).capture(date(2026, 5, 8))
+    assert len(events) == 1
+    assert events[0].project_hint == "bot-1"
+    assert events[0].raw["app"] == "Cursor.exe"

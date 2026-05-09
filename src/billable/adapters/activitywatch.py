@@ -35,6 +35,14 @@ from billable.adapters.base import CaptureAdapter
 from billable.core.events import Event
 from billable.core.sanitize import sanitize
 
+# Cursor windows almost always end in " - Cursor" and follow the pattern
+# "<doc-or-tab> - <workspace-folder-name> - Cursor". We extract the
+# second-to-last " - "-separated segment as the workspace, which becomes
+# `project_hint` and lets ProjectMapper route the focus block to the right
+# matter (or auto-discover one) without the user writing yaml.
+_CURSOR_APP_SUFFIXES = ("cursor.exe", "cursor")
+_CURSOR_TITLE_SUFFIX = " - Cursor"
+
 log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:5600"
@@ -103,12 +111,19 @@ class ActivityWatchAdapter(CaptureAdapter):
             excerpt = sanitize(
                 f"Focused on '{block.title}' in {block.app} for {duration_minutes} min."
             )
+            # If this is a Cursor window, lift the workspace folder name out
+            # of the title and use it as project_hint. That gives the mapper
+            # a stable identifier (matches `cursor_workspaces` rules and
+            # triggers the zero-config fallback) instead of the noisy full
+            # window title. For non-Cursor windows leave it None — keyword
+            # matching still operates on `content_excerpt`.
+            project_hint = extract_cursor_workspace(block.app, block.title)
             events.append(
                 Event(
                     timestamp=ts,
                     duration=block.duration,
                     source="activitywatch",
-                    project_hint=block.title,  # window title — mapper keyword-matches
+                    project_hint=project_hint,
                     artifact_ref=f"aw:{ts.isoformat()}:{_slug(block.app)}",
                     content_excerpt=excerpt,
                     raw={"app": block.app, "title": block.title},
@@ -134,6 +149,33 @@ class ActivityWatchAdapter(CaptureAdapter):
 
 
 # --- pure helpers (testable without a running ActivityWatch) ----------------
+
+
+def extract_cursor_workspace(app: str, title: str) -> str | None:
+    """If `(app, title)` is a Cursor window, return the workspace folder name.
+
+    Cursor uses the title pattern ``"<doc-or-tab> - <workspace> - Cursor"``,
+    e.g. ``".env - bot-1 - Cursor"`` or
+    ``"Clinical Documentation Review - hp-revision-portal - Cursor"``.
+
+    We extract the second-to-last ``" - "``-separated segment, which is the
+    workspace folder name. Returns None for non-Cursor windows or for
+    Cursor windows that don't follow the pattern (e.g. the welcome screen).
+    """
+    if not app or not title:
+        return None
+    if app.lower() not in _CURSOR_APP_SUFFIXES and not app.lower().endswith("cursor.exe"):
+        return None
+    if not title.endswith(_CURSOR_TITLE_SUFFIX):
+        return None
+    parts = [p.strip() for p in title.split(" - ")]
+    # Need at least: <doc> - <workspace> - Cursor
+    if len(parts) < 3:
+        return None
+    workspace = parts[-2]
+    if not workspace:
+        return None
+    return workspace
 
 
 def _pick_bucket(buckets: dict[str, dict[str, Any]], type_prefix: str) -> str | None:

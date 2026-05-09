@@ -36,6 +36,7 @@ from billable.adapters.google_docs import GoogleDocsAdapter
 from billable.adapters.notes import NotesAdapter
 from billable.core.mapper import ProjectMapper
 from billable.core.pipeline import Pipeline, PipelineConfig
+from billable.discovery import propose_projects_yaml, scan_machine
 from billable.llm.client import OpenAIClient
 from billable.notes.store import DEFAULT_NOTES_PATH, Note, append_note
 from billable.renderers.markdown import MarkdownRenderer
@@ -182,6 +183,122 @@ def note(
 def version() -> None:
     """Print the installed billable version."""
     console.print(f"billable {__version__}")
+
+
+@app.command()
+def discover(
+    days: Annotated[
+        int,
+        typer.Option(
+            "--days", help="How many days of history to scan."
+        ),
+    ] = 7,
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Where to write the proposed YAML. Defaults to "
+            "config/projects.proposed.yaml so it never clobbers your existing config.",
+        ),
+    ] = Path("./config/projects.proposed.yaml"),
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="LLM model to use for the proposal. Cheap models work fine here.",
+        ),
+    ] = "gpt-4o-mini",
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help="Overwrite config/projects.yaml with the proposal "
+            "(creates a .bak first). Off by default \u2014 review the proposed "
+            "file first.",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Verbose logging.")
+    ] = False,
+) -> None:
+    """Auto-propose a `projects.yaml` from what's on this machine.
+
+    Scans your Cursor workspaces and the last N days of ActivityWatch
+    window patterns, sends the summary to the LLM, and writes a draft
+    `projects.proposed.yaml`. You review it, then either copy it over
+    `projects.yaml` yourself or rerun with `--apply`.
+
+    First-time setup:
+        billable discover                 # scan + draft, ~$0.01 of LLM
+        # ...review config/projects.proposed.yaml...
+        billable discover --apply          # overwrite, with .bak backup
+    """
+    load_dotenv()
+    _setup_logging(verbose)
+
+    console.print(f"[bold]billable discover[/bold] (last {days} days)")
+    with console.status("[cyan]Scanning Cursor workspaces and ActivityWatch..."):
+        scan = scan_machine(days=days)
+
+    console.print(
+        f"  cursor workspaces : [bold]{len(scan.cursor_workspaces)}[/bold]"
+    )
+    console.print(
+        f"  browser patterns  : [bold]{len(scan.browser_patterns)}[/bold]"
+        f" (AW {'reachable' if scan.activitywatch_available else 'NOT reachable'})"
+    )
+    console.print(f"  recent notes      : [bold]{scan.note_count}[/bold]")
+
+    if not scan.cursor_workspaces and not scan.browser_patterns:
+        console.print(
+            "[yellow]Nothing to propose \u2014 no Cursor workspaces and no AW patterns "
+            "found in the last {} days.[/yellow]".format(days)
+        )
+        raise typer.Exit(code=1)
+
+    for ws in scan.cursor_workspaces[:10]:
+        console.print(
+            f"    \u2022 cursor: [cyan]{ws.folder_name}[/cyan] "
+            f"({ws.prompt_count} prompts, last {ws.last_seen.strftime('%Y-%m-%d')})"
+        )
+    for bp in scan.browser_patterns[:10]:
+        console.print(
+            f"    \u2022 {bp.app}: [magenta]{bp.title_prefix}[/magenta] "
+            f"({bp.occurrence_count}x, {bp.total_minutes}m)"
+        )
+
+    console.print(f"\n[cyan]Asking {model} to propose project mapping...[/cyan]")
+    llm = OpenAIClient()
+    result = propose_projects_yaml(scan, llm=llm, model=model)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(result.yaml_text, encoding="utf-8")
+    console.print(
+        f"\n[green]Proposed {result.project_count} projects[/green] -> [bold]{output}[/bold]"
+    )
+    if result.skipped_patterns:
+        console.print(
+            f"  [dim]({len(result.skipped_patterns)} browser patterns skipped as personal/generic)[/dim]"
+        )
+
+    target = output.parent / "projects.yaml"
+    if apply:
+        if target.exists():
+            backup = target.with_suffix(".yaml.bak")
+            target.rename(backup)
+            console.print(f"  backed up existing -> [dim]{backup}[/dim]")
+        output.rename(target)
+        console.print(f"[green]Applied[/green] -> [bold]{target}[/bold]")
+        console.print(
+            "  Re-run [cyan]billable run --date today --reuse-cache --stage rollup[/cyan] "
+            "to regenerate today's report against the new mapping."
+        )
+    else:
+        console.print(
+            f"\nReview [bold]{output}[/bold], then either:\n"
+            f"  - copy it over [cyan]{target}[/cyan] yourself, or\n"
+            f"  - rerun with [cyan]--apply[/cyan] (creates a .bak of your current yaml)."
+        )
 
 
 @app.command()

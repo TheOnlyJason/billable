@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from billable.core.events import Event
-from billable.core.mapper import ProjectMapper, ProjectRule
+from billable.core.mapper import (
+    ProjectMapper,
+    ProjectRule,
+    humanize_matter_id,
+    slugify_matter_id,
+)
 
 
 def _ev(
@@ -93,10 +98,80 @@ def test_first_rule_wins() -> None:
     assert mapper.resolve(_ev(project_hint="other", content_excerpt="aardvark")) == "general"
 
 
-def test_resolve_returns_none_when_no_rule_matches() -> None:
+def test_resolve_returns_none_when_no_rule_matches_and_no_fallback_signal() -> None:
+    """A gdocs event with no matching rule has no auto-discovery path."""
     rule = ProjectRule(matter_id="x", display_name="X", cursor_workspaces=("billable",))
     mapper = ProjectMapper(rules=(rule,))
-    assert mapper.resolve(_ev(project_hint="totally-unrelated")) is None
+    # gdocs is NOT in the auto-discover set, so even with a hint we get None.
+    assert mapper.resolve(_ev(source="gdocs", project_hint="totally-unrelated")) is None
+
+
+# --- auto-discovery fallback (Layer 1) --------------------------------------
+
+
+def test_resolve_falls_back_to_project_hint_for_cursor() -> None:
+    """A cursor event with no rule match still gets a synthetic matter."""
+    mapper = ProjectMapper(rules=())
+    assert (
+        mapper.resolve(_ev(source="cursor", project_hint="brand-new-project"))
+        == "brand-new-project"
+    )
+
+
+def test_resolve_falls_back_to_project_hint_for_activitywatch() -> None:
+    """AW Cursor focus blocks (workspace-extracted) auto-discover too."""
+    mapper = ProjectMapper(rules=())
+    assert (
+        mapper.resolve(_ev(source="activitywatch", project_hint="bot-1")) == "bot-1"
+    )
+
+
+def test_resolve_does_not_fall_back_when_project_hint_is_missing() -> None:
+    mapper = ProjectMapper(rules=())
+    assert mapper.resolve(_ev(source="cursor", project_hint=None)) is None
+    assert mapper.resolve(_ev(source="cursor", project_hint="")) is None
+
+
+def test_resolve_does_not_fall_back_for_gdocs_or_notes() -> None:
+    """gdoc titles and free-form notes are too noisy to auto-promote."""
+    mapper = ProjectMapper(rules=())
+    assert mapper.resolve(_ev(source="gdocs", project_hint="Q3 Sales Report")) is None
+    assert mapper.resolve(_ev(source="notes", project_hint="anything")) is None
+
+
+def test_resolve_explicit_rule_still_wins_over_fallback() -> None:
+    rule = ProjectRule(
+        matter_id="renamed-bot",
+        display_name="Renamed Bot",
+        cursor_workspaces=("bot-1",),
+    )
+    mapper = ProjectMapper(rules=(rule,))
+    # Even though fallback would produce "bot-1", the explicit rule wins.
+    assert mapper.resolve(_ev(source="cursor", project_hint="bot-1")) == "renamed-bot"
+
+
+def test_resolve_slugifies_messy_project_hints() -> None:
+    """Workspace folder names with spaces/case still produce stable matter_ids."""
+    mapper = ProjectMapper(rules=())
+    assert mapper.resolve(_ev(source="cursor", project_hint="My Cool App")) == "my-cool-app"
+    assert mapper.resolve(_ev(source="cursor", project_hint="ACME-Site")) == "acme-site"
+
+
+def test_resolve_override_still_wins_even_with_fallback() -> None:
+    mapper = ProjectMapper(rules=())
+    e = _ev(source="cursor", project_hint="bot-1", raw={"matter_id": "client-x"})
+    assert mapper.resolve(e) == "client-x"
+
+
+# --- is_explicit ------------------------------------------------------------
+
+
+def test_is_explicit_true_for_yaml_rule_false_for_synthetic() -> None:
+    mapper = ProjectMapper(
+        rules=(ProjectRule(matter_id="acme", display_name="Acme Corp"),)
+    )
+    assert mapper.is_explicit("acme") is True
+    assert mapper.is_explicit("auto-discovered-thing") is False
 
 
 # --- display_name -----------------------------------------------------------
@@ -108,7 +183,40 @@ def test_display_name_lookup_and_fallbacks() -> None:
     )
     assert mapper.display_name("acme") == "Acme Corp"
     assert mapper.display_name("unclassified") == "Unclassified"
-    assert mapper.display_name("unknown") == "unknown"
+    # Auto-discovered matters get humanized rather than raw matter_id back.
+    assert mapper.display_name("bot-1") == "Bot 1"
+    assert (
+        mapper.display_name("student-tuition-payment-portal")
+        == "Student Tuition Payment Portal"
+    )
+
+
+# --- slugify / humanize helpers --------------------------------------------
+
+
+def test_slugify_matter_id_handles_common_inputs() -> None:
+    cases = {
+        "billable": "billable",
+        "Billable": "billable",
+        "bot-1": "bot-1",
+        "My Cool App": "my-cool-app",
+        "  spaced  out  ": "spaced-out",
+        "with/slashes\\and.dots": "with-slashes-and-dots",
+        "trailing---hyphens---": "trailing-hyphens",
+    }
+    for raw, expected in cases.items():
+        assert slugify_matter_id(raw) == expected, raw
+
+
+def test_humanize_matter_id_handles_common_inputs() -> None:
+    cases = {
+        "bot-1": "Bot 1",
+        "student-tuition-payment-portal": "Student Tuition Payment Portal",
+        "my_cool_app": "My Cool App",
+        "billable": "Billable",
+    }
+    for raw, expected in cases.items():
+        assert humanize_matter_id(raw) == expected, raw
 
 
 # --- from_yaml --------------------------------------------------------------

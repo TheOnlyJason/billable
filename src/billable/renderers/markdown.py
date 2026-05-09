@@ -68,11 +68,8 @@ class MarkdownRenderer(Renderer):
         lines.append("| Matter | Description | Hours |")
         lines.append("| --- | --- | --- |")
         for entry in entries:
-            display = (
-                self.mapper.display_name(entry.matter_id) if self.mapper else entry.matter_id
-            )
             lines.append(
-                f"| {_escape_cell(display)} "
+                f"| {_escape_cell(self._matter_label(entry.matter_id))} "
                 f"| {_escape_cell(entry.description)} "
                 f"| {_format_hours(entry.hours)} |"
             )
@@ -82,16 +79,33 @@ class MarkdownRenderer(Renderer):
         lines.append(f"**Total: {_format_hours(total)}h**")
         lines.append("")
 
-        # Audit trail.
+        auto_entries = [e for e in entries if self._is_auto(e.matter_id)]
+        if auto_entries:
+            lines.append("---")
+            lines.append("")
+            lines.append("## Auto-classified matters")
+            lines.append("")
+            lines.append(
+                "These matters were inferred from your Cursor workspace folders "
+                "with no explicit rule in `config/projects.yaml`. To customize "
+                "the display name, group multiple workspaces, or set billing "
+                "metadata, run `billable discover` or add a rule by hand."
+            )
+            lines.append("")
+            for entry in auto_entries:
+                lines.append(
+                    f"- `{entry.matter_id}` "
+                    f"({self.mapper.display_name(entry.matter_id) if self.mapper else entry.matter_id})"
+                    f" — {_format_hours(entry.hours)}h"
+                )
+            lines.append("")
+
         lines.append("---")
         lines.append("")
         lines.append("## Audit trail")
         lines.append("")
         for entry in entries:
-            display = (
-                self.mapper.display_name(entry.matter_id) if self.mapper else entry.matter_id
-            )
-            lines.append(f"### {display}")
+            lines.append(f"### {self._matter_label(entry.matter_id)}")
             if entry.sources:
                 for ref in entry.sources:
                     lines.append(f"- `{ref}`")
@@ -100,6 +114,19 @@ class MarkdownRenderer(Renderer):
             lines.append("")
 
         return "\n".join(lines)
+
+    def _matter_label(self, matter_id: str) -> str:
+        display = (
+            self.mapper.display_name(matter_id) if self.mapper else matter_id
+        )
+        if self._is_auto(matter_id):
+            return f"{display} (auto)"
+        return display
+
+    def _is_auto(self, matter_id: str) -> bool:
+        if matter_id == "unclassified" or self.mapper is None:
+            return False
+        return not self.mapper.is_explicit(matter_id)
 
 
 def _escape_cell(text: str) -> str:

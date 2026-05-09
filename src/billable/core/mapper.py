@@ -1,7 +1,10 @@
 """Project / matter mapping.
 
 Reads `config/projects.yaml` and resolves each Event to a `matter_id`.
-First match wins. No match → `None`, and the LLM is told to flag it.
+First match wins. If no rule matches but the event carries a stable
+`project_hint` (Cursor workspace folder, AW-extracted Cursor workspace),
+the mapper synthesizes a matter from the hint — so a brand-new project
+shows up in the report on day one without any yaml editing.
 
 See `config/projects.example.yaml` for the schema.
 
@@ -19,16 +22,31 @@ Matcher semantics (logical OR within a project, logical AND within a matcher):
 
     keywords           fires for ANY source if any keyword (case-insensitive)
                        is a substring of project_hint OR content_excerpt
+
+Auto-discovery fallback (after all rules have been tried):
+
+    For events whose source is `cursor` or `activitywatch` AND whose
+    `project_hint` is set, the mapper synthesizes
+    matter_id = slugify(project_hint). The display name is humanized
+    from the same hint ("bot-1" -> "Bot 1"). Use `is_explicit(matter_id)`
+    to tell auto-discovered matters apart from yaml-declared ones.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from billable.core.events import Event
+
+# Sources whose `project_hint` is a stable, human-readable identifier
+# (a folder name) that we can safely promote to a synthetic matter_id.
+# Other sources (gdocs, notes) have noisier hints (doc title, none) and
+# stay Unclassified unless an explicit rule or override matches.
+_AUTO_DISCOVER_SOURCES: frozenset[str] = frozenset({"cursor", "activitywatch"})
 
 
 @dataclass(frozen=True)
@@ -123,7 +141,11 @@ class ProjectMapper:
             1. Hard override: if the event sets ``raw['matter_id']`` (e.g. a
                hotkey note with ``--matter``), trust it. Adapters use this
                to assert ground truth that bypasses keyword/folder rules.
-            2. Otherwise, evaluate rules in YAML order; first match wins.
+            2. Evaluate rules in YAML order; first match wins.
+            3. Auto-discovery fallback: for ``cursor`` / ``activitywatch``
+               events with a ``project_hint``, synthesize a matter from
+               the hint (lowercased + slugified). This is what makes the
+               tool work on a fresh install with an empty projects.yaml.
         """
         override = event.raw.get("matter_id")
         if isinstance(override, str) and override:
@@ -131,11 +153,24 @@ class ProjectMapper:
         for rule in self.rules:
             if rule.matches(event):
                 return rule.matter_id
+        if event.source in _AUTO_DISCOVER_SOURCES and event.project_hint:
+            return slugify_matter_id(event.project_hint)
         return None
+
+    def is_explicit(self, matter_id: str) -> bool:
+        """True if this matter_id has an explicit rule in projects.yaml.
+
+        Used by the renderer to mark auto-discovered matters in the report
+        so the user can promote them to real entries when they're ready.
+        """
+        return any(rule.matter_id == matter_id for rule in self.rules)
 
     def display_name(self, matter_id: str) -> str:
         """Human-readable name for a matter, e.g. 'Acme Corp — Website Redesign'.
 
+        For yaml-declared matters, returns the configured ``display_name``.
+        For auto-discovered matters (no rule), humanizes the matter_id
+        ("bot-1" -> "Bot 1", "student-tuition-portal" -> "Student Tuition Portal").
         For the synthetic 'unclassified' matter, returns 'Unclassified'.
         """
         if matter_id == "unclassified":
@@ -143,7 +178,41 @@ class ProjectMapper:
         for rule in self.rules:
             if rule.matter_id == matter_id:
                 return rule.display_name
+        return humanize_matter_id(matter_id)
+
+
+def slugify_matter_id(value: str) -> str:
+    """Normalize a project_hint into a stable matter_id.
+
+    Lowercases, replaces runs of whitespace and ``[/\\.,]`` with a single
+    hyphen, strips leading/trailing hyphens. Keeps existing hyphens and
+    underscores so folder names like ``bot-1`` and
+    ``student_tuition_portal`` round-trip cleanly.
+
+    Returns the original (lowercased) string if normalization would
+    produce an empty result.
+    """
+    s = value.strip().lower()
+    if not s:
+        return s
+    s = re.sub(r"[\s/\\.,]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s or value.strip().lower()
+
+
+def humanize_matter_id(matter_id: str) -> str:
+    """Turn an auto-discovered matter_id into a friendly display name.
+
+    Examples:
+        ``bot-1`` -> ``Bot 1``
+        ``student-tuition-payment-portal`` -> ``Student Tuition Payment Portal``
+        ``my_cool_app`` -> ``My Cool App``
+    """
+    if not matter_id:
         return matter_id
+    spaced = re.sub(r"[-_]+", " ", matter_id).strip()
+    spaced = re.sub(r"\s+", " ", spaced)
+    return " ".join(w.capitalize() if not w.isupper() else w for w in spaced.split(" "))
 
 
 def _to_str_tuple(value: object) -> tuple[str, ...]:

@@ -77,31 +77,41 @@ GOOGLE_OAUTH_CLIENT_SECRETS=./config/google_oauth_client.json
 
 ### 2. Project / matter mapping
 
-Copy `config/projects.example.yaml` to `config/projects.yaml` and edit it. This file tells the agent which work belongs to which client/project. Example:
+You have three options here, in increasing order of how much effort they take:
+
+**A. Skip it.** You don't *have* to write any yaml — every Cursor workspace folder is auto-promoted to a matter on the fly (e.g. opening `acme-site` produces an `acme-site` / "Acme Site" matter without you doing anything). Browser-only work and free-form notes will land in Unclassified, and matter display names will just be the humanized folder name. Good enough for a single-developer test drive.
+
+**B. Let the LLM write it for you.** After you've used Cursor for a few days:
+
+```powershell
+billable discover         # scans your machine, drafts config/projects.proposed.yaml
+# review that file...
+billable discover --apply  # overwrites config/projects.yaml (with .bak)
+```
+
+This produces a yaml with friendly display names inferred from your actual prompts — e.g. a `bot-1` workspace whose prompts mention Handshake AI becomes `display_name: "Handshake AI Automation Bot"`. Costs about $0.01 of LLM time and takes ~1 minute.
+
+**C. Write it by hand.** Copy `config/projects.example.yaml` to `config/projects.yaml` and edit. The schema:
 
 ```yaml
 projects:
   internal-billable-agent:
     display_name: "Internal R&D — Billable Agent"
     cursor_workspaces:
-      - billable
+      - billable                # matches Cursor prompts in this workspace
     gdoc_folder_ids:
-      - 1aBcD...        # Drive folder id
-    keywords:
-      - billable agent
-      - timesheet ai
-
-  acme-website:
-    display_name: "Acme Corp — Website Redesign"
-    cursor_workspaces:
-      - acme-site
-    gdoc_folder_ids:
-      - 1eFgH...
-    keywords:
-      - acme
+      - 1aBcD...                # Drive folder id (matches gdoc events)
+    keywords:                   # case-insensitive substring match;
+      - billable agent          # checks project_hint AND content_excerpt
+      - timesheet ai            # so it also catches AW window titles
 ```
 
-Anything that doesn't match a project gets `matter_id: unclassified` and the LLM is told to flag it.
+Resolution order at runtime:
+
+1. `--matter` override on a `billable note` invocation (hard override).
+2. Rules in `projects.yaml` order (first match wins).
+3. **Auto-discovery fallback**: cursor / activitywatch events with a workspace `project_hint` synthesize a matter from the hint itself.
+4. Otherwise: Unclassified.
 
 ### 3. Google OAuth (one-time)
 
@@ -128,6 +138,7 @@ daily_cutoff: "23:59"  # entries past this time roll into the next day
 billable run --date today
 billable run --date 2026-05-07
 billable run --range 2026-05-01..2026-05-07
+billable discover                  # auto-propose a projects.yaml from your machine
 ```
 
 Output lands in `./out/YYYY-MM-DD.md`. Raw events are cached in `./cache/events/YYYY-MM-DD.json` so you can re-run the LLM stages without re-pulling from Cursor / Google / ActivityWatch.
